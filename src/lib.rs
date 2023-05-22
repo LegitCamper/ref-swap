@@ -1,10 +1,19 @@
 #![cfg_attr(not(test), no_std)]
+//! Safe wrapper around [`AtomicPtr`](core::sync::atomic::AtomicPtr).
+//! Instead of swapping a pointer, it works with references and lifetimes, allowing a safe API.
+//!
+//! Two versions are provided:
+//! - [`RefSwap`][] for swapping references
+//! - [`OptionRefSwap`][] for swapping `Option<&T>`
+//!
+//! [`OptionRefSwap`][] encodes `None` as a null pointer and has no additionnal overhead.
 
 use core::{
     marker::PhantomData,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
+/// A reference that can atomically be changed using another reference with the same lifetime and type
 pub struct RefSwap<'a, T> {
     ptr: AtomicPtr<T>,
     phantom: PhantomData<&'a T>,
@@ -18,6 +27,13 @@ impl<'a, T> RefSwap<'a, T> {
         }
     }
 
+    /// Stores a reference if the current value is the same as the current value.
+    ///
+    /// Be aware that the comparison is only between the reference, not between the value.
+    /// If current point to another adress in memory than the reference currently holds, it will fail,
+    /// Even if both are equal according to a `PartialEq` implementation.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_and_swap`](core::sync::atomic::AtomicPtr::compare_and_swap)
     #[deprecated(note = "Use `compare_exchange` or `compare_exchange_weak` instead")]
     pub fn compare_and_swap(&self, current: &'a T, new: &'a T, order: Ordering) -> &'a T {
         #[allow(deprecated)]
@@ -31,6 +47,13 @@ impl<'a, T> RefSwap<'a, T> {
         unsafe { &*ptr }
     }
 
+    /// Stores a reference if the current value is the same as the current value.
+    ///
+    /// Be aware that the comparison is only between the reference, not between the value.
+    /// If current point to another adress in memory than the reference currently holds, it will fail,
+    /// Even if both are equal according to a `PartialEq` implementation.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange`](core::sync::atomic::AtomicPtr::compare_exchange)
     pub fn compare_exchange(
         &self,
         current: &'a T,
@@ -50,6 +73,13 @@ impl<'a, T> RefSwap<'a, T> {
             .map_err(|ptr| unsafe { &*ptr })
     }
 
+    /// Stores a reference if the current value is the same as the current value.
+    ///
+    /// Be aware that the comparison is only between the reference, not between the value.
+    /// If current point to another adress in memory than the reference currently holds, it will fail,
+    /// Even if both are equal according to a `PartialEq` implementation.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange_weak`](core::sync::atomic::AtomicPtr::compare_exchange_weak)
     pub fn compare_exchange_weak(
         &self,
         current: &'a T,
@@ -69,34 +99,47 @@ impl<'a, T> RefSwap<'a, T> {
             .map_err(|ptr| unsafe { &*ptr })
     }
 
+    /// Get a mutable reference to the current stored reference.
+    ///
+    /// This is safe because the mutable reference guarantees that no other threads are concurrently accessing the atomic data.
     pub fn get_mut<'s>(&'s mut self) -> &'s mut &'a T {
         let res: &'s mut *mut T = self.ptr.get_mut();
         // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &mut *(res as *mut *mut T as *mut &'a T) }
     }
 
+    /// Consumes the atomic and returns the contained value.
+    ///
+    /// This is safe because passing `self` by value guarantees that no other threads are concurrently accessing the atomic data.
     pub fn into_inner(self) -> &'a T {
         let res = self.ptr.into_inner();
         // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &*res }
     }
 
+    /// Fetches the value, and applies a function to it that returns an optional new value. `Returns` a `Result` of `Ok(previous_value)` if the function returned `Some(_)`, else `Err(previous_value)`.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::fetch_update`](core::sync::atomic::AtomicPtr::fetch_update)
     pub fn fetch_update<F: FnMut(&'a T) -> Option<&'a T>>(
         &self,
         set_order: Ordering,
         fetch_order: Ordering,
         mut f: F,
     ) -> Result<&'a T, &'a T> {
-        let mut prev = self.load(fetch_order);
-        while let Some(next) = f(prev) {
-            match self.compare_exchange_weak(prev, next, set_order, fetch_order) {
-                x @ Ok(_) => return x,
-                Err(next_prev) => prev = next_prev,
-            }
-        }
-        Err(prev)
+        self.ptr
+            .fetch_update(set_order, fetch_order, |ptr| {
+                f(
+                    // Safety: we know that the *mut T is always set to a `&'a T`
+                    unsafe { &*ptr },
+                )
+                .map(|r| r as *const _ as *mut _)
+            })
+            // Safety: we know that the *mut T is always set to a `&'a T`
+            .map(|ptr| unsafe { &*ptr })
+            .map_err(|ptr| unsafe { &*ptr })
     }
 
+    /// Loads a value
     pub fn load(&self, order: Ordering) -> &'a T {
         let res = self.ptr.load(order);
 
@@ -104,10 +147,12 @@ impl<'a, T> RefSwap<'a, T> {
         unsafe { &*res }
     }
 
+    /// Store a value
     pub fn store(&self, ptr: &'a T, order: Ordering) {
         self.ptr.store(ptr as *const _ as *mut _, order);
     }
 
+    /// Stores a value into the pointer, returning the previous value.
     pub fn swap(&self, ptr: &'a T, order: Ordering) -> &'a T {
         let res = self.ptr.swap(ptr as *const _ as *mut _, order);
 
@@ -116,6 +161,7 @@ impl<'a, T> RefSwap<'a, T> {
     }
 }
 
+/// An optionnal reference that can atomically be changed to another optionnal reference with the same lifetime and type
 pub struct OptionRefSwap<'a, T> {
     ptr: AtomicPtr<T>,
     phantom: PhantomData<&'a T>,
@@ -147,6 +193,13 @@ impl<'a, T> OptionRefSwap<'a, T> {
         }
     }
 
+    /// Stores a reference if the current value is the same as the current value.
+    ///
+    /// Be aware that the comparison is only between the reference, not between the value.
+    /// If current point to another adress in memory than the reference currently holds, it will fail,
+    /// Even if both are equal according to a `PartialEq` implementation.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_and_swap`](core::sync::atomic::AtomicPtr::compare_and_swap)
     #[deprecated(note = "Use `compare_exchange` or `compare_exchange_weak` instead")]
     pub fn compare_and_swap(
         &self,
@@ -163,6 +216,13 @@ impl<'a, T> OptionRefSwap<'a, T> {
         unsafe { ptr_to_opt(ptr) }
     }
 
+    /// Stores a reference if the current value is the same as the current value.
+    ///
+    /// Be aware that the comparison is only between the reference, not between the value.
+    /// If current point to another adress in memory than the reference currently holds, it will fail,
+    /// Even if both are equal according to a `PartialEq` implementation.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange`](core::sync::atomic::AtomicPtr::compare_exchange)
     pub fn compare_exchange(
         &self,
         current: Option<&'a T>,
@@ -179,6 +239,13 @@ impl<'a, T> OptionRefSwap<'a, T> {
             .map_err(|ptr| unsafe { ptr_to_opt(ptr) })
     }
 
+    /// Stores a reference if the current value is the same as the current value.
+    ///
+    /// Be aware that the comparison is only between the reference, not between the value.
+    /// If current point to another adress in memory than the reference currently holds, it will fail,
+    /// Even if both are equal according to a `PartialEq` implementation.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange_weak`](core::sync::atomic::AtomicPtr::compare_exchange_weak)
     pub fn compare_exchange_weak(
         &self,
         current: Option<&'a T>,
@@ -195,6 +262,9 @@ impl<'a, T> OptionRefSwap<'a, T> {
             .map_err(|ptr| unsafe { ptr_to_opt(ptr) })
     }
 
+    /// Get a mutable reference to the current stored reference.
+    ///
+    /// This is safe because the mutable reference guarantees that no other threads are concurrently accessing the atomic data.
     #[allow(unused)]
     fn get_mut<'s>(&'s mut self) -> &'s mut Option<&'a T> {
         let res: &'s mut *mut T = self.ptr.get_mut();
@@ -205,28 +275,38 @@ impl<'a, T> OptionRefSwap<'a, T> {
         unsafe { core::mem::transmute(res) }
     }
 
+    /// Consumes the atomic and returns the contained value.
+    ///
+    /// This is safe because passing `self` by value guarantees that no other threads are concurrently accessing the atomic data.
     pub fn into_inner(self) -> &'a T {
         let res = self.ptr.into_inner();
         // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &*res }
     }
 
+    /// Fetches the value, and applies a function to it that returns an optional new value. `Returns` a `Result` of `Ok(previous_value)` if the function returned `Some(_)`, else `Err(previous_value)`.
+    ///
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::fetch_update`](core::sync::atomic::AtomicPtr::fetch_update)
     pub fn fetch_update<F: FnMut(Option<&'a T>) -> Option<Option<&'a T>>>(
         &self,
         set_order: Ordering,
         fetch_order: Ordering,
         mut f: F,
     ) -> Result<Option<&'a T>, Option<&'a T>> {
-        let mut prev = self.load(fetch_order);
-        while let Some(next) = f(prev) {
-            match self.compare_exchange_weak(prev, next, set_order, fetch_order) {
-                x @ Ok(_) => return x,
-                Err(next_prev) => prev = next_prev,
-            }
-        }
-        Err(prev)
+        self.ptr
+            .fetch_update(set_order, fetch_order, |ptr| {
+                f(
+                    // Safety: we know that the *mut T is always set to a `Option<&'a T>`
+                    unsafe { ptr_to_opt(ptr) },
+                )
+                .map(opt_to_ptr)
+            })
+            // Safety: we know that the *mut T is always set to a `&'a T`
+            .map(|ptr| unsafe { ptr_to_opt(ptr) })
+            .map_err(|ptr| unsafe { ptr_to_opt(ptr) })
     }
 
+    /// Loads a value
     pub fn load(&self, order: Ordering) -> Option<&'a T> {
         let res = self.ptr.load(order);
 
@@ -234,10 +314,12 @@ impl<'a, T> OptionRefSwap<'a, T> {
         unsafe { ptr_to_opt(res) }
     }
 
+    /// Stores a value
     pub fn store(&self, ptr: Option<&'a T>, order: Ordering) {
         self.ptr.store(opt_to_ptr(ptr), order);
     }
 
+    /// Stores a value into the pointer, returning the previous value.
     pub fn swap(&self, ptr: Option<&'a T>, order: Ordering) -> Option<&'a T> {
         let res = self.ptr.swap(opt_to_ptr(ptr), order);
 
