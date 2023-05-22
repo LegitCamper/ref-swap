@@ -72,7 +72,7 @@ impl<'a, T> RefSwap<'a, T> {
     pub fn get_mut<'s>(&'s mut self) -> &'s mut &'a T {
         let res: &'s mut *mut T = self.ptr.get_mut();
         // Safety: we know that the *mut T is always set to a `&'a T`
-        unsafe { core::mem::transmute(res) }
+        unsafe { &mut *(res as *mut *mut T as *mut &'a T) }
     }
 
     pub fn into_inner(self) -> &'a T {
@@ -243,5 +243,21 @@ impl<'a, T> OptionRefSwap<'a, T> {
 
         // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { ptr_to_opt(res) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[allow(unused)]
+    fn variance<'a, 'b>(a: &'a u32, b: Option<&'b u32>) {
+        let r = RefSwap::new(a);
+        let stat: &'static u32 = &123;
+        r.store(stat, Ordering::Relaxed);
+
+        let r = OptionRefSwap::new(b);
+        let stat: Option<&'static u32> = Some(&123);
+        r.store(b, Ordering::Relaxed);
     }
 }
