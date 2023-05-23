@@ -1,7 +1,11 @@
+# Copyright (C) 2022 Nitrokey GmbH
+# SPDX-License-Identifier: LGPL-3.0-only
+
 [package]
 name = "ref-swap"
 version = "0.1.0"
 edition = "2021"
 authors = ["Nitrokey GmbH <info@nitrokey.com>"]
+description = "Safe wrapper around AtomicPtr"
 repository = "https://github.com/nitrokey/ref-swap"
 license = "LGPL-3.0-only"

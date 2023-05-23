@@ -1,3 +1,6 @@
+// Copyright (C) 2022 Nitrokey GmbH
+// SPDX-License-Identifier: LGPL-3.0-only
+
 #![cfg_attr(not(test), no_std)]
 //! Safe wrapper around [`AtomicPtr`](core::sync::atomic::AtomicPtr).
 //! Instead of swapping a pointer, it works with references and lifetimes, allowing a safe API.
