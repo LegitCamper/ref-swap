@@ -2,14 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 #![cfg_attr(not(test), no_std)]
-//! Safe wrapper around [`AtomicPtr`](core::sync::atomic::AtomicPtr).
-//! Instead of swapping a pointer, it works with references and lifetimes, allowing a safe API.
-//!
-//! Two versions are provided:
-//! - [`RefSwap`][] for swapping references
-//! - [`OptionRefSwap`][] for swapping `Option<&T>`
-//!
-//! [`OptionRefSwap`][] encodes `None` as a null pointer and has no additionnal overhead.
+#![doc = include_str!("../README.md")]
 
 use core::{
     marker::PhantomData,
