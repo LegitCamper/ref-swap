@@ -9,6 +9,51 @@ use core::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
+/// Relaxed operations can lead to race conditions:
+///
+/// Thread A can pass a reference with relaxed ordering to thread B which means that no garanties are made that the data seen by thread B after dereferencing the reference will include the mutations that thread B
+fn load(ordering: Ordering) -> Ordering {
+    match ordering {
+        Ordering::Relaxed | Ordering::Acquire => Ordering::Acquire,
+
+        Ordering::AcqRel => Ordering::AcqRel,
+        Ordering::SeqCst => Ordering::SeqCst,
+        Ordering::Release => panic!("Release ordering cannot be used for loads"),
+        _ => unimplemented!("{ordering:?} is not supported"),
+    }
+}
+
+fn store(ordering: Ordering) -> Ordering {
+    match ordering {
+        Ordering::Relaxed | Ordering::Release => Ordering::Release,
+
+        Ordering::AcqRel => Ordering::AcqRel,
+        Ordering::SeqCst => Ordering::SeqCst,
+        Ordering::Acquire => panic!("Acquire ordering cannot be used for stores"),
+        _ => unimplemented!("{ordering:?} is not supported"),
+    }
+}
+
+fn load_store(ordering: Ordering) -> Ordering {
+    match ordering {
+        Ordering::Relaxed | Ordering::Release | Ordering::Acquire | Ordering::AcqRel => {
+            Ordering::AcqRel
+        }
+
+        Ordering::SeqCst => Ordering::SeqCst,
+        _ => unimplemented!("{ordering:?} is not supported"),
+    }
+}
+
+// SAFETY:
+//
+// # Lifetimes
+// After being loaded, a reference is guarateed to be alive for 'a because it was required when it was stored
+//
+// # Thread Safety
+// the `load` and `store` and `load_store` functions are used to coerce orderings to have at least Release-Acquire semantics.
+// This ensures that any data written *before* the call to a `store` is synchronized with the thread observing the reference through a `load` operation
+
 /// A reference that can atomically be changed using another reference with the same lifetime and type
 pub struct RefSwap<'a, T> {
     ptr: AtomicPtr<T>,
@@ -36,10 +81,9 @@ impl<'a, T> RefSwap<'a, T> {
         let ptr = self.ptr.compare_and_swap(
             current as *const _ as *mut _,
             new as *const _ as *mut _,
-            order,
+            load_store(order),
         );
 
-        // Safety: the pointer can only be set to a reference that lives for &'a
         unsafe { &*ptr }
     }
 
@@ -60,11 +104,10 @@ impl<'a, T> RefSwap<'a, T> {
         let res = self.ptr.compare_exchange(
             current as *const _ as *mut _,
             new as *const _ as *mut _,
-            success,
-            failure,
+            load_store(success),
+            load(failure),
         );
 
-        // Safety: the pointer can only be set to a reference that lives for &'a
         res.map(|ptr| unsafe { &*ptr })
             .map_err(|ptr| unsafe { &*ptr })
     }
@@ -86,11 +129,10 @@ impl<'a, T> RefSwap<'a, T> {
         let res = self.ptr.compare_exchange_weak(
             current as *const _ as *mut _,
             new as *const _ as *mut _,
-            success,
-            failure,
+            load_store(success),
+            load(failure),
         );
 
-        // Safety: the pointer can only be set to a reference that lives for &'a
         res.map(|ptr| unsafe { &*ptr })
             .map_err(|ptr| unsafe { &*ptr })
     }
@@ -100,7 +142,6 @@ impl<'a, T> RefSwap<'a, T> {
     /// This is safe because the mutable reference guarantees that no other threads are concurrently accessing the atomic data.
     pub fn get_mut<'s>(&'s mut self) -> &'s mut &'a T {
         let res: &'s mut *mut T = self.ptr.get_mut();
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &mut *(res as *mut *mut T as *mut &'a T) }
     }
 
@@ -109,7 +150,6 @@ impl<'a, T> RefSwap<'a, T> {
     /// This is safe because passing `self` by value guarantees that no other threads are concurrently accessing the atomic data.
     pub fn into_inner(self) -> &'a T {
         let res = self.ptr.into_inner();
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &*res }
     }
 
@@ -123,36 +163,29 @@ impl<'a, T> RefSwap<'a, T> {
         mut f: F,
     ) -> Result<&'a T, &'a T> {
         self.ptr
-            .fetch_update(set_order, fetch_order, |ptr| {
-                f(
-                    // Safety: we know that the *mut T is always set to a `&'a T`
-                    unsafe { &*ptr },
-                )
-                .map(|r| r as *const _ as *mut _)
+            .fetch_update(load_store(set_order), load(fetch_order), |ptr| {
+                f(unsafe { &*ptr }).map(|r| r as *const _ as *mut _)
             })
-            // Safety: we know that the *mut T is always set to a `&'a T`
             .map(|ptr| unsafe { &*ptr })
             .map_err(|ptr| unsafe { &*ptr })
     }
 
     /// Loads a value
     pub fn load(&self, order: Ordering) -> &'a T {
-        let res = self.ptr.load(order);
+        let res = self.ptr.load(load(order));
 
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &*res }
     }
 
     /// Store a value
     pub fn store(&self, ptr: &'a T, order: Ordering) {
-        self.ptr.store(ptr as *const _ as *mut _, order);
+        self.ptr.store(ptr as *const _ as *mut _, store(order));
     }
 
     /// Stores a value into the pointer, returning the previous value.
     pub fn swap(&self, ptr: &'a T, order: Ordering) -> &'a T {
-        let res = self.ptr.swap(ptr as *const _ as *mut _, order);
+        let res = self.ptr.swap(ptr as *const _ as *mut _, load_store(order));
 
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &*res }
     }
 }
@@ -204,11 +237,10 @@ impl<'a, T> OptionRefSwap<'a, T> {
         order: Ordering,
     ) -> Option<&'a T> {
         #[allow(deprecated)]
-        let ptr = self
-            .ptr
-            .compare_and_swap(opt_to_ptr(current), opt_to_ptr(new), order);
+        let ptr =
+            self.ptr
+                .compare_and_swap(opt_to_ptr(current), opt_to_ptr(new), load_store(order));
 
-        // Safety: the pointer can only be set to a reference that lives for &'a
         unsafe { ptr_to_opt(ptr) }
     }
 
@@ -226,11 +258,13 @@ impl<'a, T> OptionRefSwap<'a, T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<Option<&'a T>, Option<&'a T>> {
-        let res = self
-            .ptr
-            .compare_exchange(opt_to_ptr(current), opt_to_ptr(new), success, failure);
+        let res = self.ptr.compare_exchange(
+            opt_to_ptr(current),
+            opt_to_ptr(new),
+            load_store(success),
+            load(failure),
+        );
 
-        // Safety: the pointer can only be set to a reference that lives for &'a
         res.map(|ptr| unsafe { ptr_to_opt(ptr) })
             .map_err(|ptr| unsafe { ptr_to_opt(ptr) })
     }
@@ -249,11 +283,13 @@ impl<'a, T> OptionRefSwap<'a, T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<Option<&'a T>, Option<&'a T>> {
-        let res =
-            self.ptr
-                .compare_exchange_weak(opt_to_ptr(current), opt_to_ptr(new), success, failure);
+        let res = self.ptr.compare_exchange_weak(
+            opt_to_ptr(current),
+            opt_to_ptr(new),
+            load_store(success),
+            load(failure),
+        );
 
-        // Safety: the pointer can only be set to a reference that lives for &'a
         res.map(|ptr| unsafe { ptr_to_opt(ptr) })
             .map_err(|ptr| unsafe { ptr_to_opt(ptr) })
     }
@@ -267,7 +303,6 @@ impl<'a, T> OptionRefSwap<'a, T> {
 
         // TODO: Is this transmute really safe? Making this function private until I'm sure
 
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { core::mem::transmute(res) }
     }
 
@@ -276,7 +311,6 @@ impl<'a, T> OptionRefSwap<'a, T> {
     /// This is safe because passing `self` by value guarantees that no other threads are concurrently accessing the atomic data.
     pub fn into_inner(self) -> &'a T {
         let res = self.ptr.into_inner();
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { &*res }
     }
 
@@ -290,36 +324,29 @@ impl<'a, T> OptionRefSwap<'a, T> {
         mut f: F,
     ) -> Result<Option<&'a T>, Option<&'a T>> {
         self.ptr
-            .fetch_update(set_order, fetch_order, |ptr| {
-                f(
-                    // Safety: we know that the *mut T is always set to a `Option<&'a T>`
-                    unsafe { ptr_to_opt(ptr) },
-                )
-                .map(opt_to_ptr)
+            .fetch_update(load_store(set_order), load(fetch_order), |ptr| {
+                f(unsafe { ptr_to_opt(ptr) }).map(opt_to_ptr)
             })
-            // Safety: we know that the *mut T is always set to a `&'a T`
             .map(|ptr| unsafe { ptr_to_opt(ptr) })
             .map_err(|ptr| unsafe { ptr_to_opt(ptr) })
     }
 
     /// Loads a value
     pub fn load(&self, order: Ordering) -> Option<&'a T> {
-        let res = self.ptr.load(order);
+        let res = self.ptr.load(load(order));
 
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { ptr_to_opt(res) }
     }
 
     /// Stores a value
     pub fn store(&self, ptr: Option<&'a T>, order: Ordering) {
-        self.ptr.store(opt_to_ptr(ptr), order);
+        self.ptr.store(opt_to_ptr(ptr), store(order));
     }
 
     /// Stores a value into the pointer, returning the previous value.
     pub fn swap(&self, ptr: Option<&'a T>, order: Ordering) -> Option<&'a T> {
-        let res = self.ptr.swap(opt_to_ptr(ptr), order);
+        let res = self.ptr.swap(opt_to_ptr(ptr), load_store(order));
 
-        // Safety: we know that the *mut T is always set to a `&'a T`
         unsafe { ptr_to_opt(res) }
     }
 }
