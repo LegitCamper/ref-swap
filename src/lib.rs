@@ -4,10 +4,8 @@
 #![cfg_attr(not(test), no_std)]
 #![doc = include_str!("../README.md")]
 
-use core::{
-    marker::PhantomData,
-    sync::atomic::{AtomicPtr, Ordering},
-};
+use core::marker::PhantomData;
+use portable_atomic::{AtomicPtr, Ordering};
 
 /// Relaxed operations can lead to race conditions:
 ///
@@ -74,26 +72,7 @@ impl<'a, T> RefSwap<'a, T> {
     /// If current point to another adress in memory than the reference currently holds, it will fail,
     /// Even if both are equal according to a `PartialEq` implementation.
     ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_and_swap`](core::sync::atomic::AtomicPtr::compare_and_swap)
-    #[deprecated(note = "Use `compare_exchange` or `compare_exchange_weak` instead")]
-    pub fn compare_and_swap(&self, current: &'a T, new: &'a T, order: Ordering) -> &'a T {
-        #[allow(deprecated)]
-        let ptr = self.ptr.compare_and_swap(
-            current as *const _ as *mut _,
-            new as *const _ as *mut _,
-            load_store(order),
-        );
-
-        unsafe { &*ptr }
-    }
-
-    /// Stores a reference if the current value is the same as the current value.
-    ///
-    /// Be aware that the comparison is only between the reference, not between the value.
-    /// If current point to another adress in memory than the reference currently holds, it will fail,
-    /// Even if both are equal according to a `PartialEq` implementation.
-    ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange`](core::sync::atomic::AtomicPtr::compare_exchange)
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange`](portable_atomic::AtomicPtr::compare_exchange)
     pub fn compare_exchange(
         &self,
         current: &'a T,
@@ -118,7 +97,7 @@ impl<'a, T> RefSwap<'a, T> {
     /// If current point to another adress in memory than the reference currently holds, it will fail,
     /// Even if both are equal according to a `PartialEq` implementation.
     ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange_weak`](core::sync::atomic::AtomicPtr::compare_exchange_weak)
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange_weak`](portable_atomic::AtomicPtr::compare_exchange_weak)
     pub fn compare_exchange_weak(
         &self,
         current: &'a T,
@@ -155,7 +134,7 @@ impl<'a, T> RefSwap<'a, T> {
 
     /// Fetches the value, and applies a function to it that returns an optional new value. `Returns` a `Result` of `Ok(previous_value)` if the function returned `Some(_)`, else `Err(previous_value)`.
     ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::fetch_update`](core::sync::atomic::AtomicPtr::fetch_update)
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::fetch_update`](portable_atomic::AtomicPtr::fetch_update)
     pub fn fetch_update<F: FnMut(&'a T) -> Option<&'a T>>(
         &self,
         set_order: Ordering,
@@ -228,29 +207,7 @@ impl<'a, T> OptionRefSwap<'a, T> {
     /// If current point to another adress in memory than the reference currently holds, it will fail,
     /// Even if both are equal according to a `PartialEq` implementation.
     ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_and_swap`](core::sync::atomic::AtomicPtr::compare_and_swap)
-    #[deprecated(note = "Use `compare_exchange` or `compare_exchange_weak` instead")]
-    pub fn compare_and_swap(
-        &self,
-        current: Option<&'a T>,
-        new: Option<&'a T>,
-        order: Ordering,
-    ) -> Option<&'a T> {
-        #[allow(deprecated)]
-        let ptr =
-            self.ptr
-                .compare_and_swap(opt_to_ptr(current), opt_to_ptr(new), load_store(order));
-
-        unsafe { ptr_to_opt(ptr) }
-    }
-
-    /// Stores a reference if the current value is the same as the current value.
-    ///
-    /// Be aware that the comparison is only between the reference, not between the value.
-    /// If current point to another adress in memory than the reference currently holds, it will fail,
-    /// Even if both are equal according to a `PartialEq` implementation.
-    ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange`](core::sync::atomic::AtomicPtr::compare_exchange)
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange`](portable_atomic::AtomicPtr::compare_exchange)
     pub fn compare_exchange(
         &self,
         current: Option<&'a T>,
@@ -275,7 +232,7 @@ impl<'a, T> OptionRefSwap<'a, T> {
     /// If current point to another adress in memory than the reference currently holds, it will fail,
     /// Even if both are equal according to a `PartialEq` implementation.
     ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange_weak`](core::sync::atomic::AtomicPtr::compare_exchange_weak)
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::compare_exchange_weak`](portable_atomic::AtomicPtr::compare_exchange_weak)
     pub fn compare_exchange_weak(
         &self,
         current: Option<&'a T>,
@@ -316,7 +273,7 @@ impl<'a, T> OptionRefSwap<'a, T> {
 
     /// Fetches the value, and applies a function to it that returns an optional new value. `Returns` a `Result` of `Ok(previous_value)` if the function returned `Some(_)`, else `Err(previous_value)`.
     ///
-    /// For more information on the orderings, se the documentation of [`AtomicPtr::fetch_update`](core::sync::atomic::AtomicPtr::fetch_update)
+    /// For more information on the orderings, se the documentation of [`AtomicPtr::fetch_update`](portable_atomic::AtomicPtr::fetch_update)
     pub fn fetch_update<F: FnMut(Option<&'a T>) -> Option<Option<&'a T>>>(
         &self,
         set_order: Ordering,

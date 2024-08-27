@@ -12,3 +12,6 @@ keywords = ["atomic", "references", "no-std", "arc-swap"]
 repository = "https://github.com/nitrokey/ref-swap"
 license = "Apache-2.0 OR MIT"
 readme = "README.md"
+
+[dependencies]
+portable-atomic = "1.7.0"
